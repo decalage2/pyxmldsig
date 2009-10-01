@@ -1,0 +1,5 @@
+include Licence_CeCILL_V2-en.html
+include Licence_CeCILL_V2-fr.html
+include HTML.py.html
+include install.bat
+include HTML_tutorial.py
