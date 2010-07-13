@@ -29,15 +29,29 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
 
-USAGE: pyxmldsig.py <data.xml> -k <key-file.pem> [-c cert-file.pem] [-p password]
+USAGE AS A TOOL:
+pyxmldsig.py <data.xml> -k <key-file.pem> [-c cert-file.pem] [-p password]
 
-
-SAMPLE USAGE IN A PYTHON APPLICATION:
+USAGE IN A PYTHON APPLICATION:
 
 import pyxmldsig
-signed_xml = pyxmldsig.sign_file(template_file='myfile.xml', 
+
+# simple function interface:
+signed_xml = pyxmldsig.sign_file(template_file='myfile.xml',
     key_file='mykey.pem', cert_file='myx509cert.pem', password='mypassword')
 print signed_xml
+
+# sign with class interface:
+xdsig = pyxmldsig.Xmldsig(key_file='mykey.pem', cert_file='myx509cert.pem',
+    password='mypassword')
+signed_xml1 = xdsig.sign_file('myfile.xml')
+signed_xml2 = xdsig.sign_file(pyxmldsig.TEMPLATE_WITH_CERT)
+
+# verify with class interface:
+xdsig2 = pyxmldsig.Xmldsig()
+xdsig2.load_certs(['cacert.pem', 'myx509cert.pem'])
+assert xdsig2.verify_xmlstring(signed_xml1) == True
+assert xdsig2.verify_xmlstring(signed_xml2) == True
 
 
 REQUIREMENTS:
