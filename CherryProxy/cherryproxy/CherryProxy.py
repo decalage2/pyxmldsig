@@ -52,14 +52,14 @@ IMPORTANT NOTE: This version can only handle one request at a time, this will be
 
 #------------------------------------------------------------------------------
 # TODO:
-# + thread local attributes to store request and response attributes
 # + methods to parse useful headers: content-type, content-disposition, etc
 # + methods to send generic responses: 404, 403, ...
 # + proper logging using the standard logging module (use a logger object or
 #   integrate with CherryPy?)
 # + init option to enable debug messages or not
 # + init option to set parent proxy
-# + only read request body and response body when needed
+# + only read request body and response body when needed, or add methods
+#   adapt_req_headers and adapt_resp_headers
 # - CLI parameters to set options (should be extensible by subclasses)
 # ? config file to set options?
 # ? use urllib2 instead of httplib?
@@ -68,12 +68,12 @@ IMPORTANT NOTE: This version can only handle one request at a time, this will be
 #--- IMPORTS ------------------------------------------------------------------
 
 from cherrypy import wsgiserver
-import urlparse, urllib2, httplib, sys
+import urlparse, urllib2, httplib, sys, threading
 
 
 #--- CONSTANTS ----------------------------------------------------------------
 
-__version__ = '0.05'
+__version__ = '0.06'
 
 SERVER_NAME = 'CherryProxy/%s' % __version__
 
@@ -90,11 +90,15 @@ class CherryProxy (object):
         print 'CherryProxy listening on %s:%d (press Ctrl+C to stop)' % (address, port)
         self.server = wsgiserver.CherryPyWSGIServer((address, port),
             self.proxy_app, server_name=server_name)
-        self.environ = {}
-        self.req_headers = {}
-        self.req_data = None
-        self.resp_headers = {}
-        self.resp_data = None
+        # thread local variables to store request/response data per thread:
+        self.req = threading.local()
+        self.resp = threading.local()
+        # TODO: move these to thread local
+        self.req.environ = {}
+        self.req.headers = {}
+        self.req.data = None
+        self.resp.headers = {}
+        self.resp.data = None
         if debug:
             self.debug = self.debug_enabled
             self.debug_mode = True
@@ -125,66 +129,69 @@ class CherryProxy (object):
 
 
     def proxy_app(self, environ, start_response):
-        self.environ = environ
+        t = threading.current_thread()
+        self.debug('Thread %d - %s' % (t.ident, t.name))
+        self.req.environ = environ
         self.debug('_'*79)
         self.debug('REQUEST RECEIVED FROM CLIENT:')
         for env in environ:
             self.debug('%s: %s' % (env, environ[env]))
         #print environ
-        self.req_headers = {}
+        self.req.headers = {}
         for h in environ:
             if h.startswith('HTTP_'):
                 hname = h[5:].replace('_', '-')
-                self.req_headers[hname] = environ[h]
+                self.req.headers[hname] = environ[h]
         #print headers
-        method = environ['REQUEST_METHOD']
-        scheme = environ['wsgi.url_scheme']
-        self.netloc = environ['SERVER_NAME']
-        path = environ['PATH_INFO']
-        query = environ['QUERY_STRING']
-        self.url = urlparse.urlunsplit(('', '', path, query, ''))
+        self.req.method = environ['REQUEST_METHOD']
+        self.req.scheme = environ['wsgi.url_scheme']
+        self.req.netloc = environ['SERVER_NAME']
+        self.req.path = environ['PATH_INFO']
+        self.req.query = environ['QUERY_STRING']
+        self.req.url = urlparse.urlunsplit(
+            ('', '', self.req.path, self.req.query, ''))
         self.debug('- '*39)
         # if request has data, read it:
         if 'CONTENT_LENGTH' in environ:
-            length = int(environ['CONTENT_LENGTH'])
-            self.debug('REQUEST BODY: content-length=%d' % length)
-            self.req_data = environ['wsgi.input'].read(length)
-            self.debug(self.req_data)
+            self.req.length = int(environ['CONTENT_LENGTH'])
+            self.debug('REQUEST BODY: content-length=%d' % self.req.length)
+            self.req.data = environ['wsgi.input'].read(self.req.length)
+            self.debug(self.req.data)
         else:
             self.debug('No request body.')
-            self.req_data = None
+            self.req.data = None
         # adapt request before sending it:
         self.adapt_request()
         self.debug('- '*39)
         # send request to server:
-        conn = httplib.HTTPConnection(self.netloc)
+        conn = httplib.HTTPConnection(self.req.netloc)
         if self.debug_mode:
             conn.set_debuglevel(1)
-        conn.request(method, self.url, body=self.req_data, headers=self.req_headers)
-        self.resp = conn.getresponse()
-        self.status = self.resp.status
-        self.reason = self.resp.reason
-        status = "%d %s" % (self.status, self.reason) #'200 OK'
+        conn.request(self.req.method, self.req.url, body=self.req.data, headers=self.req.headers)
+        self.resp.response = conn.getresponse()
+        self.resp.status = self.resp.response.status
+        self.resp.reason = self.resp.response.reason
+        status = "%d %s" % (self.resp.status, self.resp.reason) #'200 OK'
         self.debug('- '*39)
         self.debug('RESPONSE RECEIVED FROM SERVER:')
         self.debug(status)
-        self.resp_headers = self.resp.getheaders() #[('Content-type','text/plain')]
-        for h in self.resp_headers:
+        self.resp.headers = self.resp.response.getheaders() #[('Content-type','text/plain')]
+        for h in self.resp.headers:
             self.debug(' - %s: %s' % (h[0], h[1]))
-        self.data = self.resp.read()
+        self.resp.data = self.resp.response.read()
 ##        print '- '*39
 ##        print repr(self.data)
         # adapt response before sending it to client:
         self.adapt_response()
         # send response to client:
-        status = "%d %s" % (self.status, self.reason) #'200 OK'
+        status = "%d %s" % (self.resp.status, self.resp.reason) #'200 OK'
         self.debug('- '*39)
         self.debug('RESPONSE SENT TO CLIENT:')
         self.debug(status)
-        for h in self.resp_headers:
+        for h in self.resp.headers:
             self.debug(' - %s: %s' % (h[0], h[1]))
-        start_response(status, self.resp_headers)
-        return [self.data]
+        start_response(status, self.resp.headers)
+        return [self.resp.data]
 
 
 #=== MAIN =====================================================================
