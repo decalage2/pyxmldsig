@@ -48,18 +48,27 @@ IMPORTANT NOTE: This version can only handle one request at a time, this will be
 # 2009-05-06 v0.04 PL: - forward request body to server
 # 2010-04-25 v0.05 PL: - moved nozip demo to separate script
 #                      - debug option to enable/disable debug output
+# 2011-09-03 v0.06 PL: - replaced attributes by thread local variables to
+#                        support multithreading
+# 2011-09-07 v0.07 PL: - use logging instead of print for debugging
+#                      - split proxy_app into several methods
+#                      - close each http connection to server
 
 
 #------------------------------------------------------------------------------
 # TODO:
+# + fix examples, using CT+filename, blocking some requests
+# + simple doc describing API
 # + methods to parse useful headers: content-type, content-disposition, etc
 # + methods to send generic responses: 404, 403, ...
-# + proper logging using the standard logging module (use a logger object or
-#   integrate with CherryPy?)
+# + method to send a response anytime (need to store start_response in self.req)
+# + method to disable logging (if log_level=None) and to add a dummy handler
 # + init option to enable debug messages or not
 # + init option to set parent proxy
 # + only read request body and response body when needed, or add methods
 #   adapt_req_headers and adapt_resp_headers
+# + close http connection after receiving response from server
+# - later, reuse http connection when no connection close header or keep-alive
 # - CLI parameters to set options (should be extensible by subclasses)
 # ? config file to set options?
 # ? use urllib2 instead of httplib?
@@ -68,12 +77,12 @@ IMPORTANT NOTE: This version can only handle one request at a time, this will be
 #--- IMPORTS ------------------------------------------------------------------
 
 from cherrypy import wsgiserver
-import urlparse, urllib2, httplib, sys, threading
+import urlparse, urllib2, httplib, sys, threading, logging
 
 
 #--- CONSTANTS ----------------------------------------------------------------
 
-__version__ = '0.06'
+__version__ = '0.07'
 
 SERVER_NAME = 'CherryProxy/%s' % __version__
 
@@ -83,7 +92,7 @@ SERVER_NAME = 'CherryProxy/%s' % __version__
 class CherryProxy (object):
 
     def __init__(self, address='0.0.0.0', port=8070, server_name=SERVER_NAME,
-        debug=False):
+        debug=False, log_level=logging.INFO):
         """
         CherryProxy constructor
         """
@@ -93,46 +102,73 @@ class CherryProxy (object):
         # thread local variables to store request/response data per thread:
         self.req = threading.local()
         self.resp = threading.local()
-        # TODO: move these to thread local
-        self.req.environ = {}
-        self.req.headers = {}
-        self.req.data = None
-        self.resp.headers = {}
-        self.resp.data = None
         if debug:
             self.debug = self.debug_enabled
             self.debug_mode = True
         else:
             self.debug = self.debug_disabled
             self.debug_mode = False
+        self.log = logging.getLogger('CProxy')
+        self.log.setLevel(log_level)
 
 
     def start(self):
+        """
+        start proxy server
+        """
         self.server.start()
 
 
     def stop(self):
+        """
+        stop proxy server
+        """
         self.server.stop()
 
+
     def debug_enabled(self, string):
-        print string
+        """
+        debug method when debug mode is enabled
+        """
+        #print string
+        self.log.debug(string)
 
     def debug_disabled(self, string):
+        """
+        debug method when debug mode is disabled (does nothing)
+        """
         pass
 
 
-    def adapt_request(self):
-        pass
+    def init_request_response(self):
+        """
+        Initialize variables when a new request is received
+        """
+        # request variables
+        self.req.environ = {}
+        self.req.headers = {}
+        self.req.method = None
+        self.req.scheme = None
+        self.req.netloc = None
+        self.req.path = None
+        self.req.query = None
+        self.req.url = None
+        self.req.length = 0
+        self.req.data = None
+        # response variables
+        self.resp.response = None
+        self.resp.status = None
+        self.resp.reason = None
+        self.resp.headers = {}
+        self.resp.data = None
 
-    def adapt_response(self):
-        pass
 
-
-    def proxy_app(self, environ, start_response):
-        t = threading.current_thread()
-        self.debug('Thread %d - %s' % (t.ident, t.name))
+    def parse_request(self, environ):
+        """
+        parse a request received from a client
+        """
         self.req.environ = environ
-        self.debug('_'*79)
+        self.debug('_'*50)
         self.debug('REQUEST RECEIVED FROM CLIENT:')
         for env in environ:
             self.debug('%s: %s' % (env, environ[env]))
@@ -150,7 +186,18 @@ class CherryProxy (object):
         self.req.query = environ['QUERY_STRING']
         self.req.url = urlparse.urlunsplit(
             ('', '', self.req.path, self.req.query, ''))
-        self.debug('- '*39)
+        self.debug('- '*25)
+        self.log.info('Request %s' % (self.req.url))
+        # init values before reading request body
+        self.req.length = 0
+        self.req.data = None
+
+
+    def read_request_body(self):
+        """
+        read the request body if available
+        """
+        environ = self.req.environ
         # if request has data, read it:
         if 'CONTENT_LENGTH' in environ:
             self.req.length = int(environ['CONTENT_LENGTH'])
@@ -158,11 +205,27 @@ class CherryProxy (object):
             self.req.data = environ['wsgi.input'].read(self.req.length)
             self.debug(self.req.data)
         else:
-            self.debug('No request body.')
+            self.req.length = 0
             self.req.data = None
-        # adapt request before sending it:
-        self.adapt_request()
-        self.debug('- '*39)
+            self.debug('No request body.')
+
+
+    def adapt_request(self):
+        """
+        Method to be overridden:
+        Called to analyse/filter/modify the request received from the client,
+        after reading the full request with its body if there is one,
+        before it is sent to the server.
+        """
+        pass
+
+
+    def send_request(self):
+        """
+        forward a request received from a client to the server
+        Get the response (but not the response body yet)
+        """
+        self.debug('- '*25)
         # send request to server:
         conn = httplib.HTTPConnection(self.req.netloc)
         if self.debug_mode:
@@ -172,25 +235,73 @@ class CherryProxy (object):
         self.resp.status = self.resp.response.status
         self.resp.reason = self.resp.response.reason
         status = "%d %s" % (self.resp.status, self.resp.reason) #'200 OK'
-        self.debug('- '*39)
+        self.debug('- '*25)
         self.debug('RESPONSE RECEIVED FROM SERVER:')
         self.debug(status)
         self.resp.headers = self.resp.response.getheaders() #[('Content-type','text/plain')]
         for h in self.resp.headers:
             self.debug(' - %s: %s' % (h[0], h[1]))
+        self.log.info('Response %s' % (status))
+
+
+
+    def read_response_body(self):
+        """
+        read the response body and close the connection
+        """
+        # TODO: check content-length?
         self.resp.data = self.resp.response.read()
 ##        print '- '*39
 ##        print repr(self.data)
-        # adapt response before sending it to client:
-        self.adapt_response()
-        # send response to client:
+        # For now we always close the connection, even if the client sends
+        # several requests in one connection:
+        # (not optimal performance-wise, but simpler to code)
+        self.resp.response.close()
+
+
+    def adapt_response(self):
+        """
+        Method to be overridden:
+        Called to analyse/filter/modify the response received from the server,
+        after reading the full response with its body if there is one,
+        before it is sent back to the client.
+        """
+        pass
+
+
+    def send_response(self, start_response):
+        """
+        send the response with headers (but no body yet)
+        """
         status = "%d %s" % (self.resp.status, self.resp.reason) #'200 OK'
-        self.debug('- '*39)
+        self.debug('- '*25)
         self.debug('RESPONSE SENT TO CLIENT:')
         self.debug(status)
         for h in self.resp.headers:
             self.debug(' - %s: %s' % (h[0], h[1]))
         start_response(status, self.resp.headers)
+
+
+    def proxy_app(self, environ, start_response):
+        """
+        main method called when a request is received from a client
+        (WSGI application)
+        """
+        # parse request headers:
+        self.parse_request(environ)
+        # if request has data, read it:
+        self.read_request_body()
+        # adapt request before sending it to server:
+        self.adapt_request()
+        # send request to server:
+        self.send_request()
+        # read the response body
+        self.read_response_body()
+        # adapt response before sending it to client:
+        self.adapt_response()
+        # send response to client:
+        self.send_response(start_response)
+        # send response body:
         return [self.resp.data]
 
 
@@ -199,14 +310,19 @@ class CherryProxy (object):
 if __name__ == '__main__':
     # simple CherryProxy without filter:
     debug=False
+    log_level = logging.INFO
     try:
         if sys.argv[1] == '-d':
             debug=True
+            log_level = logging.DEBUG
     except:
         pass
 
+    # setup logging
+    logging.basicConfig(format='%(name)s-%(thread)05d: %(levelname)-8s %(message)s', level=logging.DEBUG)
+
     print __doc__
-    proxy = CherryProxy(debug=debug)
+    proxy = CherryProxy(debug=debug, log_level=log_level)
     while True:
         try:
             proxy.start()
