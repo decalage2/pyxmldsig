@@ -30,13 +30,8 @@ Usage:
   adapt_request and adapt_response as desired. See the example scripts for
   more information.
 
-usage: CherryProxy.py [-d]
+usage: CherryProxy.py -h
 
--d: debug mode
-
-
-IMPORTANT NOTE: This version can only handle one request at a time, this will be
-                fixed in a new version soon.
 """
 
 #------------------------------------------------------------------------------
@@ -53,6 +48,7 @@ IMPORTANT NOTE: This version can only handle one request at a time, this will be
 # 2011-09-07 v0.07 PL: - use logging instead of print for debugging
 #                      - split proxy_app into several methods
 #                      - close each http connection to server
+# 2011-09-15 v0.08 PL: - command-line options
 
 
 #------------------------------------------------------------------------------
@@ -82,7 +78,7 @@ import urlparse, urllib2, httplib, sys, threading, logging
 
 #--- CONSTANTS ----------------------------------------------------------------
 
-__version__ = '0.07'
+__version__ = '0.08'
 
 SERVER_NAME = 'CherryProxy/%s' % __version__
 
@@ -91,7 +87,7 @@ SERVER_NAME = 'CherryProxy/%s' % __version__
 
 class CherryProxy (object):
 
-    def __init__(self, address='0.0.0.0', port=8070, server_name=SERVER_NAME,
+    def __init__(self, address='localhost', port=8070, server_name=SERVER_NAME,
         debug=False, log_level=logging.INFO):
         """
         CherryProxy constructor
@@ -357,11 +353,23 @@ class CherryProxy (object):
 #=== MAIN =====================================================================
 
 if __name__ == '__main__':
+    import optparse
+    parser = optparse.OptionParser()
+    parser.add_option("-p", "--port", dest="port", type='int', default=8070,
+                      help="port for HTTP proxy, 8070 by default")
+    parser.add_option("-a", "--address", dest="address", default='localhost',
+                      help="IP address of interface for HTTP proxy (0.0.0.0 for all, default=localhost)")
+    parser.add_option("-v", "--verbose",
+                      action="store_true", dest="verbose")
+    (options, args) = parser.parse_args()
+    if len(args) != 0:
+        parser.error("incorrect number of arguments")
+
     # simple CherryProxy without filter:
     debug=False
     log_level = logging.INFO
     try:
-        if sys.argv[1] == '-d':
+        if options.verbose:
             debug=True
             log_level = logging.DEBUG
     except:
@@ -371,7 +379,8 @@ if __name__ == '__main__':
     logging.basicConfig(format='%(name)s-%(thread)05d: %(levelname)-8s %(message)s', level=logging.DEBUG)
 
     print __doc__
-    proxy = CherryProxy(debug=debug, log_level=log_level)
+    proxy = CherryProxy(address=options.address, port=options.port,
+        debug=debug, log_level=log_level)
     while True:
         try:
             proxy.start()
