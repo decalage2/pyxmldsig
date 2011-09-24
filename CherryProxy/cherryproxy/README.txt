@@ -36,6 +36,6 @@ USAGE IN A PYTHON APPLICATION:
 
 - import cherryproxy
 - create a subclass of cherryproxy.CherryProxy
-- implement methods adapt_request and/or adapt_response to enable filtering as
+- implement methods filter_request and/or filter_response to enable filtering as
   needed.
 - see provided examples
