@@ -45,7 +45,7 @@ author_email="decalage at laposte dot net"
 url="http://www.decalage.info/python/cherryproxy"
 license="BSD"
 packages=[
-    "cherryproxy",
+    "cherryproxy", 'cherryproxy.examples'
 ]
 download_url="http://www.decalage.info/python/cherryproxy"
 data_files=[
