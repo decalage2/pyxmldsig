@@ -45,11 +45,17 @@ author_email="decalage at laposte dot net"
 url="http://www.decalage.info/python/cherryproxy"
 license="BSD"
 packages=[
-    "cherryproxy", 'cherryproxy.examples'
+    "cherryproxy", 'cherryproxy.examples',
+    'cherryproxy.cherrypy', 'cherryproxy.cherrypy.wsgiserver',
 ]
 download_url="http://www.decalage.info/python/cherryproxy"
 data_files=[
-    ('cherryproxy', ['cherryproxy/README.txt',
+    ('cherryproxy', [
+        'cherryproxy/README.txt',
+                  ]),
+    ('cherryproxy.cherrypy', [
+        'cherryproxy/cherrypy/README.txt',
+        'cherryproxy/cherrypy/LICENSE.txt',
                   ]),
 ]
 ##if sys.version_info >= (3, 0):

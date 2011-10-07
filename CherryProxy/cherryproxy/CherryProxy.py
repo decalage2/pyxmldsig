@@ -58,6 +58,7 @@ usage: CherryProxy.py -h
 
 #------------------------------------------------------------------------------
 # TODO:
+# + update CherryPy WSGI server to the latest version
 # + disable debug options
 # + fix examples, using CT+filename, blocking some requests
 # + simple doc describing API
