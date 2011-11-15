@@ -55,6 +55,7 @@ usage: CherryProxy.py -h
 #                        request to server
 # 2011-09-30 v0.11 PL: - added methods to filter headers before reading body
 # 2011-11-15 v0.12 PL: - moved and renamed private methods with an underscore
+#                      - added option to use a parent proxy
 
 
 #------------------------------------------------------------------------------
@@ -68,7 +69,6 @@ usage: CherryProxy.py -h
 #   http://www.ietf.org/rfc/rfc2183.txt
 # + method to disable logging (if log_level=None) and to add a dummy handler
 # + init option to enable debug messages or not
-# + init option to set parent proxy
 # + force connection close and remove keep-alive on server side
 # + close connection on server side when needed
 # - option to log to a file
@@ -110,7 +110,7 @@ class CherryProxy (object):
     """
 
     def __init__(self, address='localhost', port=8070, server_name=SERVER_NAME,
-        debug=False, log_level=logging.INFO, options=None):
+        debug=False, log_level=logging.INFO, options=None, parent_proxy=None):
         """
         CherryProxy constructor
 
@@ -121,6 +121,8 @@ class CherryProxy (object):
         debug: enable debugging messages if set to True
         log_level: logging level (use constants from logging module)
         options: None or optparse.OptionParser object to provide additional options
+        parent_proxy: parent proxy, either IP address or hostname, with optional
+            port (example: 'myproxy.local:8080')
         """
         # initialize logging
         self.log = logging.getLogger('CProxy')
@@ -129,7 +131,7 @@ class CherryProxy (object):
         self.address = address
         self.port = port
         self.server = wsgiserver.CherryPyWSGIServer((address, port),
-            self.proxy_app, server_name=server_name)
+            self._proxy_app, server_name=server_name)
         # thread local variables to store request/response data per thread:
         self.req = threading.local()
         self.resp = threading.local()
@@ -140,6 +142,9 @@ class CherryProxy (object):
             self.debug = self._debug_disabled
             self.debug_mode = False
         self.options = options
+        self.parent_proxy = parent_proxy
+        if parent_proxy:
+            self.debug('Using parent proxy: %s' % parent_proxy)
 
 
     def start(self):
@@ -399,12 +404,23 @@ class CherryProxy (object):
         Get the response (but not the response body yet)
         """
         #self.debug('- '*25)
-        # send request to server:
-        self.debug('sending request to server')
-        self.resp.httpconn = httplib.HTTPConnection(self.req.netloc)
+        if self.parent_proxy:
+            # if a parent proxy is specified, this is the address to connect to:
+            netloc = self.parent_proxy
+            # and the URL is the full one:
+            url = self.req.full_url
+            self.debug('sending request to the parent proxy: %s - %s' % (netloc, url))
+        else:
+            # if no parent proxy is specified, we connect directly to the server:
+            netloc = self.req.netloc
+            # and the URL is the full one:
+            url = self.req.url
+            self.debug('sending request directly to the server: %s - %s' % (netloc, url))
+        # send request to server or proxy:
+        self.resp.httpconn = httplib.HTTPConnection(netloc)
 ##        if self.debug_mode:
 ##            self.resp.httpconn.set_debuglevel(1)
-        self.resp.httpconn.request(self.req.method, self.req.url,
+        self.resp.httpconn.request(self.req.method, url,
             body=self.req.data, headers=self.req.headers)
         self.resp.response = self.resp.httpconn.getresponse()
         self.resp.status = self.resp.response.status
@@ -492,6 +508,8 @@ def main(cproxy=CherryProxy, optionparser=None):
                       help="port for HTTP proxy, 8070 by default")
     parser.add_option("-a", "--address", dest="address", default='localhost',
                       help="IP address of interface for HTTP proxy (0.0.0.0 for all, default=localhost)")
+    parser.add_option("-f", "--forward", dest="proxy", default=None,
+                      help="Forward requests to parent proxy, specified as hostname[:port] or IP address[:port]")
     parser.add_option("-v", "--verbose",
                       action="store_true", dest="verbose")
     (options, args) = parser.parse_args()
@@ -513,7 +531,7 @@ def main(cproxy=CherryProxy, optionparser=None):
 
     print __doc__
     proxy = cproxy(address=options.address, port=options.port,
-        debug=debug, log_level=log_level, options=options)
+        debug=debug, log_level=log_level, options=options, parent_proxy=options.proxy)
     while True:
         try:
             proxy.start()
