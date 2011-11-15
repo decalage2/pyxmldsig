@@ -54,6 +54,7 @@ usage: CherryProxy.py -h
 #                      - added methods to send response without forwarding
 #                        request to server
 # 2011-09-30 v0.11 PL: - added methods to filter headers before reading body
+# 2011-11-15 v0.12 PL: - moved and renamed private methods with an underscore
 
 
 #------------------------------------------------------------------------------
@@ -89,7 +90,7 @@ import urlparse, urllib2, httplib, sys, threading, logging
 
 #--- CONSTANTS ----------------------------------------------------------------
 
-__version__ = '0.11'
+__version__ = '0.12'
 
 SERVER_NAME = 'CherryProxy/%s' % __version__
 
@@ -133,10 +134,10 @@ class CherryProxy (object):
         self.req = threading.local()
         self.resp = threading.local()
         if debug:
-            self.debug = self.debug_enabled
+            self.debug = self._debug_enabled
             self.debug_mode = True
         else:
-            self.debug = self.debug_disabled
+            self.debug = self._debug_disabled
             self.debug_mode = False
         self.options = options
 
@@ -158,104 +159,6 @@ class CherryProxy (object):
         self.log.info('CherryProxy stopped.')
 
 
-    def debug_enabled(self, string):
-        """
-        debug method when debug mode is enabled
-        """
-        #print string
-        self.log.debug(string)
-
-    def debug_disabled(self, string):
-        """
-        debug method when debug mode is disabled (does nothing)
-        """
-        pass
-
-
-    def init_request_response(self):
-        """
-        Initialize variables when a new request is received
-        """
-        # request variables
-        self.req.environ = {}
-        self.req.headers = {}
-        self.req.method = None
-        self.req.scheme = None
-        self.req.netloc = None
-        self.req.path = None
-        self.req.query = None
-        self.req.url = None
-        self.req.length = 0
-        self.req.content_type = None
-        self.req.charset = None
-        self.req.url_filename = None
-        self.req.data = None
-        # response variables
-        self.resp.httpconn = None
-        self.resp.response = None
-        self.resp.status = None
-        self.resp.reason = None
-        self.resp.headers = [] # httplib headers is a list of (header, value) tuples
-        self.resp.content_type = None
-        self.resp.charset = None
-        self.resp.content_disp_filename = None
-        self.resp.data = None
-
-
-    def parse_request(self, environ):
-        """
-        parse a request received from a client
-        """
-        self.req.environ = environ
-        #self.debug('_'*50)
-        self.debug('REQUEST RECEIVED FROM CLIENT:')
-        self.debug('req.environ = %s' % environ)
-        #for env in environ:
-        #    self.debug('%s: %s' % (env, environ[env]))
-        #print environ
-        # convert WSGI environ to a dict of HTTP headers:
-        self.req.headers = {}
-        for h in environ:
-            if h.startswith('HTTP_'):
-                hname = h[5:].replace('_', '-').lower()
-                self.req.headers[hname] = environ[h]
-        self.debug('req.headers = %s' % self.req.headers)
-        # content-type and content-length are stored differently, without "HTTP_"
-        # (cf. CherryPy WSGIServer source code or WSGI specs)
-        #self.req.headers['content-type'] = self.req.environ.get('CONTENT_TYPE', None)
-        #self.req.headers['content-length'] = self.req.environ.get('CONTENT_LENGTH', None)
-        #print headers
-        self.req.method = environ['REQUEST_METHOD'] # GET, POST, HEAD, etc
-        self.req.scheme = environ['wsgi.url_scheme'] # http
-        self.req.netloc = environ['SERVER_NAME'] # www.server.com[:80]
-        self.req.path = environ['PATH_INFO'] # /folder/index.html
-        self.req.query = environ['QUERY_STRING']
-        # URL=/path?query used when forwarding directly to the server
-        self.req.url = urlparse.urlunsplit(
-            ('', '', self.req.path, self.req.query, ''))
-        # full URL used when forwarding to a parent proxy
-        self.req.full_url = urlparse.urlunsplit(
-            (self.req.scheme, self.req.netloc, self.req.path, self.req.query, ''))
-        # parse content-type and charset:
-        # see RFC 2616: http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.17
-        #ct = self.req.headers.get('content-type', None)
-        ct = self.req.environ.get('CONTENT_TYPE', None)
-        if ct is not None:
-            if ';' in ct:
-                ct, charset = ct.split(';', 1)
-                self.req.content_type = ct.strip()
-                self.req.charset = charset.strip()
-            else:
-                self.req.content_type = ct.strip()
-        self.debug('req.content_type = "%s"' % self.req.content_type)
-        self.debug('req.charset      = "%s"' % self.req.charset)
-        #self.debug('- '*25)
-        self.log.info('Request %s %s' % (self.req.method, self.req.full_url))
-        # init values before reading request body
-        self.req.length = 0
-        self.req.data = None
-
-
     def filter_request_headers(self):
         """
         Method to be overridden:
@@ -267,23 +170,6 @@ class CherryProxy (object):
         before being sent to the server.
         """
         pass
-
-
-    def read_request_body(self):
-        """
-        read the request body if available
-        """
-        environ = self.req.environ
-        # if request has data, read it:
-        if 'CONTENT_LENGTH' in environ:
-            self.req.length = int(environ['CONTENT_LENGTH'])
-            self.debug('REQUEST BODY: content-length=%d' % self.req.length)
-            self.req.data = environ['wsgi.input'].read(self.req.length)
-            self.debug(self.req.data)
-        else:
-            self.req.length = 0
-            self.req.data = None
-            self.debug('No request body.')
 
 
     def filter_request(self):
@@ -299,49 +185,6 @@ class CherryProxy (object):
         pass
 
 
-    def send_request(self):
-        """
-        forward a request received from a client to the server
-        Get the response (but not the response body yet)
-        """
-        #self.debug('- '*25)
-        # send request to server:
-        self.debug('sending request to server')
-        self.resp.httpconn = httplib.HTTPConnection(self.req.netloc)
-##        if self.debug_mode:
-##            self.resp.httpconn.set_debuglevel(1)
-        self.resp.httpconn.request(self.req.method, self.req.url,
-            body=self.req.data, headers=self.req.headers)
-        self.resp.response = self.resp.httpconn.getresponse()
-        self.resp.status = self.resp.response.status
-        self.resp.reason = self.resp.response.reason
-        status = "%d %s" % (self.resp.status, self.resp.reason) #'200 OK'
-        #self.debug('- '*25)
-        self.debug('RESPONSE RECEIVED FROM SERVER: %s' % status)
-
-
-    def parse_response(self):
-        """
-        parse a request received from a client
-        """
-        self.resp.headers = self.resp.response.getheaders() #[('Content-type','text/plain')]
-        for h in self.resp.headers:
-            self.debug(' - %s: %s' % (h[0], h[1]))
-        # parse content-type and charset:
-        # using mimetools.Message.gettype() on HTTPResponse.msg
-        self.resp.content_type = self.resp.response.msg.gettype().lower()
-        self.debug('resp.content_type = %s' % self.resp.content_type)
-##        ct = self.resp.headers.get('content-type', None)
-##        if ';' in ct:
-##            ct, charset = ct.split(';', 1)
-##            self.req.content_type = ct.strip()
-##            self.req.charset = charset.strip()
-##        elif ct is not None:
-##            self.req.content_type = ct.strip()
-        self.log.info('Response %s %s' % (self.resp.status, self.resp.reason))
-
-
-
     def filter_response_headers(self):
         """
         Method to be overridden:
@@ -353,16 +196,6 @@ class CherryProxy (object):
         (e.g. replaced by a simple response) before being sent to the client.
         """
         pass
-
-
-    def read_response_body(self):
-        """
-        read the response body and close the connection
-        """
-        # TODO: check content-length?
-        self.resp.data = self.resp.response.read()
-##        print '- '*39
-##        print repr(self.data)
 
 
     def filter_response(self):
@@ -417,7 +250,203 @@ class CherryProxy (object):
             content_type=content_type)
 
 
-    def send_response(self, start_response):
+    def _proxy_app(self, environ, start_response):
+        """
+        main method called when a request is received from a client
+        (WSGI application)
+        """
+        self._init_request_response()
+        # parse request headers:
+        self._parse_request(environ)
+        # filter request headers before reading the request body:
+        self.filter_request_headers()
+        # check if the response was set by filter_request_headers, else continue:
+        if self.resp.status is None:
+            # if request has data, read it:
+            self._read_request_body()
+            # filter request before sending it to server:
+            self.filter_request()
+        # check if the response was set by filter_request, else forward to server:
+        if self.resp.status is None:
+            # send request to server:
+            self._send_request()
+            # parse response headers:
+            self._parse_response()
+            # filter response headers before reading the response body:
+            self.filter_response_headers()
+        # check if the response was set by filter_response_headers, else continue:
+        # (here we need to check if resp.data is still None)
+        if self.resp.data is None:
+            # read the response body
+            self._read_response_body()
+            # filter response before sending it to client:
+            self.filter_response()
+        # For now we always close the connection, even if the client sends
+        # several requests in one connection:
+        # (not optimal performance-wise, but simpler to code)
+        if self.resp.httpconn is not None:
+            self.resp.httpconn.close()
+        # send response to client:
+        self._send_response(start_response)
+        # send response body:
+        return [self.resp.data]
+
+
+    def _init_request_response(self):
+        """
+        Initialize variables when a new request is received
+        """
+        # request variables
+        self.req.environ = {}
+        self.req.headers = {}
+        self.req.method = None
+        self.req.scheme = None
+        self.req.netloc = None
+        self.req.path = None
+        self.req.query = None
+        self.req.url = None
+        self.req.length = 0
+        self.req.content_type = None
+        self.req.charset = None
+        self.req.url_filename = None
+        self.req.data = None
+        # response variables
+        self.resp.httpconn = None
+        self.resp.response = None
+        self.resp.status = None
+        self.resp.reason = None
+        self.resp.headers = [] # httplib headers is a list of (header, value) tuples
+        self.resp.content_type = None
+        self.resp.charset = None
+        self.resp.content_disp_filename = None
+        self.resp.data = None
+
+
+    def _parse_request(self, environ):
+        """
+        parse a request received from a client
+        """
+        self.req.environ = environ
+        #self.debug('_'*50)
+        self.debug('REQUEST RECEIVED FROM CLIENT:')
+        self.debug('req.environ = %s' % environ)
+        #for env in environ:
+        #    self.debug('%s: %s' % (env, environ[env]))
+        #print environ
+        # convert WSGI environ to a dict of HTTP headers:
+        self.req.headers = {}
+        for h in environ:
+            if h.startswith('HTTP_'):
+                hname = h[5:].replace('_', '-').lower()
+                self.req.headers[hname] = environ[h]
+        self.debug('req.headers = %s' % self.req.headers)
+        # content-type and content-length are stored differently, without "HTTP_"
+        # (cf. CherryPy WSGIServer source code or WSGI specs)
+        #self.req.headers['content-type'] = self.req.environ.get('CONTENT_TYPE', None)
+        #self.req.headers['content-length'] = self.req.environ.get('CONTENT_LENGTH', None)
+        #print headers
+        self.req.method = environ['REQUEST_METHOD'] # GET, POST, HEAD, etc
+        self.req.scheme = environ['wsgi.url_scheme'] # http
+        self.req.netloc = environ['SERVER_NAME'] # www.server.com[:80]
+        self.req.path = environ['PATH_INFO'] # /folder/index.html
+        self.req.query = environ['QUERY_STRING']
+        # URL=/path?query used when forwarding directly to the server
+        self.req.url = urlparse.urlunsplit(
+            ('', '', self.req.path, self.req.query, ''))
+        # full URL used when forwarding to a parent proxy
+        self.req.full_url = urlparse.urlunsplit(
+            (self.req.scheme, self.req.netloc, self.req.path, self.req.query, ''))
+        # parse content-type and charset:
+        # see RFC 2616: http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.17
+        #ct = self.req.headers.get('content-type', None)
+        ct = self.req.environ.get('CONTENT_TYPE', None)
+        if ct is not None:
+            if ';' in ct:
+                ct, charset = ct.split(';', 1)
+                self.req.content_type = ct.strip()
+                self.req.charset = charset.strip()
+            else:
+                self.req.content_type = ct.strip()
+        self.debug('req.content_type = "%s"' % self.req.content_type)
+        self.debug('req.charset      = "%s"' % self.req.charset)
+        #self.debug('- '*25)
+        self.log.info('Request %s %s' % (self.req.method, self.req.full_url))
+        # init values before reading request body
+        self.req.length = 0
+        self.req.data = None
+
+
+    def _read_request_body(self):
+        """
+        read the request body if available
+        """
+        environ = self.req.environ
+        # if request has data, read it:
+        if 'CONTENT_LENGTH' in environ:
+            self.req.length = int(environ['CONTENT_LENGTH'])
+            self.debug('REQUEST BODY: content-length=%d' % self.req.length)
+            self.req.data = environ['wsgi.input'].read(self.req.length)
+            self.debug(self.req.data)
+        else:
+            self.req.length = 0
+            self.req.data = None
+            self.debug('No request body.')
+
+
+    def _send_request(self):
+        """
+        forward a request received from a client to the server
+        Get the response (but not the response body yet)
+        """
+        #self.debug('- '*25)
+        # send request to server:
+        self.debug('sending request to server')
+        self.resp.httpconn = httplib.HTTPConnection(self.req.netloc)
+##        if self.debug_mode:
+##            self.resp.httpconn.set_debuglevel(1)
+        self.resp.httpconn.request(self.req.method, self.req.url,
+            body=self.req.data, headers=self.req.headers)
+        self.resp.response = self.resp.httpconn.getresponse()
+        self.resp.status = self.resp.response.status
+        self.resp.reason = self.resp.response.reason
+        status = "%d %s" % (self.resp.status, self.resp.reason) #'200 OK'
+        #self.debug('- '*25)
+        self.debug('RESPONSE RECEIVED FROM SERVER: %s' % status)
+
+
+    def _parse_response(self):
+        """
+        parse a request received from a client
+        """
+        self.resp.headers = self.resp.response.getheaders() #[('Content-type','text/plain')]
+        for h in self.resp.headers:
+            self.debug(' - %s: %s' % (h[0], h[1]))
+        # parse content-type and charset:
+        # using mimetools.Message.gettype() on HTTPResponse.msg
+        self.resp.content_type = self.resp.response.msg.gettype().lower()
+        self.debug('resp.content_type = %s' % self.resp.content_type)
+##        ct = self.resp.headers.get('content-type', None)
+##        if ';' in ct:
+##            ct, charset = ct.split(';', 1)
+##            self.req.content_type = ct.strip()
+##            self.req.charset = charset.strip()
+##        elif ct is not None:
+##            self.req.content_type = ct.strip()
+        self.log.info('Response %s %s' % (self.resp.status, self.resp.reason))
+
+
+
+    def _read_response_body(self):
+        """
+        read the response body and close the connection
+        """
+        # TODO: check content-length?
+        self.resp.data = self.resp.response.read()
+##        print '- '*39
+##        print repr(self.data)
+
+
+    def _send_response(self, start_response):
         """
         send the response with headers (but no body yet)
         """
@@ -430,46 +459,18 @@ class CherryProxy (object):
         start_response(status, self.resp.headers)
 
 
-    def proxy_app(self, environ, start_response):
+    def _debug_enabled(self, string):
         """
-        main method called when a request is received from a client
-        (WSGI application)
+        debug method when debug mode is enabled
         """
-        self.init_request_response()
-        # parse request headers:
-        self.parse_request(environ)
-        # filter request headers before reading the request body:
-        self.filter_request_headers()
-        # check if the response was set by filter_request_headers, else continue:
-        if self.resp.status is None:
-            # if request has data, read it:
-            self.read_request_body()
-            # filter request before sending it to server:
-            self.filter_request()
-        # check if the response was set by filter_request, else forward to server:
-        if self.resp.status is None:
-            # send request to server:
-            self.send_request()
-            # parse response headers:
-            self.parse_response()
-            # filter response headers before reading the response body:
-            self.filter_response_headers()
-        # check if the response was set by filter_response_headers, else continue:
-        # (here we need to check if resp.data is still None)
-        if self.resp.data is None:
-            # read the response body
-            self.read_response_body()
-            # filter response before sending it to client:
-            self.filter_response()
-        # For now we always close the connection, even if the client sends
-        # several requests in one connection:
-        # (not optimal performance-wise, but simpler to code)
-        if self.resp.httpconn is not None:
-            self.resp.httpconn.close()
-        # send response to client:
-        self.send_response(start_response)
-        # send response body:
-        return [self.resp.data]
+        #print string
+        self.log.debug(string)
+
+    def _debug_disabled(self, string):
+        """
+        debug method when debug mode is disabled (does nothing)
+        """
+        pass
 
 
 #=== MAIN =====================================================================
