@@ -72,6 +72,7 @@ usage: CherryProxy.py -h
 # + force connection close and remove keep-alive on server side
 # + close connection on server side when needed
 # - option to log to a file
+# + _send_request: reconstruct URL from its elements (if they were changed)
 
 
 # TODO LATER:
@@ -173,6 +174,24 @@ class CherryProxy (object):
 
         This method may call set_response() if the request needs to be blocked
         before being sent to the server.
+
+        The following attributes can be read and MODIFIED:
+            self.req.headers: dictionary of HTTP headers, with lowercase names
+            self.req.method: HTTP method, e.g. GET, POST, etc
+            self.req.scheme: protocol from URL, e.g. http or https
+            self.req.netloc: IP address or hostname of server, with optional port
+            self.req.path: path in URL, for example '/folder/index.html'
+            self.req.query: query string, found after question mark in URL
+
+        The following attributes can be READ only:
+            self.req.environ: dictionary of request attributes following WSGI
+                              format (PEP 333)
+            self.req.url: partial URL containing 'path?query'
+            self.req.full_url: full URL containing 'scheme:netloc/path?query'
+            self.req.length: length of request data in bytes, 0 if none
+            self.req.content_type = None
+            self.req.charset = None
+            self.req.url_filename = None
         """
         pass
 
@@ -186,6 +205,10 @@ class CherryProxy (object):
 
         This method may call set_response() if the request needs to be blocked
         before being sent to the server.
+
+        The following attributes can be read and MODIFIED:
+            self.req.data: data sent with the request (POST or PUT)
+            (and also all listed in filter_request_headers)
         """
         pass
 
@@ -403,6 +426,7 @@ class CherryProxy (object):
         forward a request received from a client to the server
         Get the response (but not the response body yet)
         """
+        #TODO: reconstruct URL from its elements (if they were changed)
         #self.debug('- '*25)
         if self.parent_proxy:
             # if a parent proxy is specified, this is the address to connect to:
