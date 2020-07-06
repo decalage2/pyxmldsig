@@ -1,6 +1,0 @@
-include install.bat
-include INSTALL.txt
-include cherryproxy/README.txt
-
-include cherryproxy/cherrypy/README.txt
-include cherryproxy/cherrypy/LICENSE.txt
